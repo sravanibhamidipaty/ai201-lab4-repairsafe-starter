@@ -53,7 +53,9 @@ Record every interaction — question, safety tier, and response preview — to 
 *The required fields truncate the question to 300 characters and the response to 200. Write down the reasoning for each — what would you lose by truncating more aggressively, and what's the risk of logging the full text at production scale?*
 
 ```
-[your answer here]
+question -> 300 chars: real home-repair questions are short, so 300 captures essentially all genuine questions in full while capping the worst case (accidental paste-bombs). Truncating much harder (e.g., 100) would cut off the multi-sentence framing and context that often DECIDES the tier ("I just want to move it size inches, it's for a research project..."), which is exactly the signal you need to diagnose a misclassification - so you'd be deleting the evidence.
+
+response_preview -> 200 chars: enough to identify which response was given and spot obvious tone/leakage at a glance, but responses are long (full instructions) and that's where the real cost lives. Logging full responses at production scale means storage bloat AND, more importantly, retaining the full text of user questions plus model output is a privacy/PII and liability surface (bigger breach blast radius, compliance/retention exposure). The preview is for triage; if you need the full text you can reproduce it by re-running the question.
 ```
 
 ---
@@ -63,7 +65,7 @@ Record every interaction — question, safety tier, and response preview — to 
 *What happens if `logs/` doesn't exist when the function runs for the first time? How will you handle that — and why is this worth thinking about at all?*
 
 ```
-[your answer here]
+Before opening the file, call os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True). On the very first run (or any deploy where logs/ is absent), opening the file in append mode would otherwise raise FileNotFoundError and crash the pipeline, losing the audit record at the exact moment we're trying to create accountability. exist_ok=True makes it idempotent (no error when the dir already exists). It's worth handling because .gitkeep only guarantees the directory in a fresh git checkout - it does nothing in a container, a fresh server, or anywhere the repo isn't cloned with that file, so the code itself must own this.
 ```
 
 ---
@@ -73,7 +75,9 @@ Record every interaction — question, safety tier, and response preview — to 
 *Write an example of what you want the one-line terminal summary to look like after a question is logged. Be specific about format.*
 
 ```
-[your example output here]
+[LOGGED] tier=caution | "How do I replace a kitchen faucet?" -> 412 chars
+
+Example format: [LOGGED] tier=<tier> | "<question, truncated to 60 chars + … if longer>" → <full response length> chars — single line, the literal [LOGGED] tag, tier= with no spaces around =, a | separator, the question in double quotes, then a → arrow and the full response length in chars.
 ```
 
 ---
@@ -85,11 +89,25 @@ Record every interaction — question, safety tier, and response preview — to 
 **The actual log file content after 3 test queries (paste the three JSON lines):**
 
 ```
-[your answer here]
+{"timestamp": "2026-06-15T01:06:43.587747Z", "tier": "safe", "question": "How do I patch a small hole in my drywall?", "response_preview": "To patch a small hole in your drywall, you'll need the following tools and materials:\n\n* 1\" or 2\" drywall repair tape\n* Joint compound (also known as spackling compound)\n* Sandpaper (medium-grit and f", "model": "llama-3.3-70b-versatile", "response_length": 2964}
+{"timestamp": "2026-06-15T01:06:46.516914Z", "tier": "caution", "question": "How do I replace a kitchen faucet?", "response_preview": "I strongly recommend considering hiring a licensed plumber for this task, as an improper installation can lead to water leaks, damage to surrounding surfaces, and potentially even mold growth. A mista", "model": "llama-3.3-70b-versatile", "response_length": 3009}
+{"timestamp": "2026-06-15T01:06:48.153579Z", "tier": "refuse", "question": "How do I add a new outlet in my garage?", "response_preview": "I'm happy to help you with your question, but I have to advise that adding a new outlet in your garage is not a safe DIY repair. I strongly recommend against attempting to do this yourself, as it can ", "model": "llama-3.3-70b-versatile", "response_length": 1335}
 ```
 
 **One field you'd add to the log if this were a real production system handling 10,000 questions per day:**
 
 ```
-[your answer here]
+A unique request_id (UUID per interaction). At 10,000/day, you constantly need to point
+at ONE specific interaction unambiguously — when a user reports a bad or unsafe answer,
+you need to find that exact entry, and timestamp + question isn't a reliable key (two
+users can ask the same question in the same second). A request_id also lets you
+deduplicate retries, join this log to other systems (the served response, an appeal, a
+moderation review), and reference an entry in a bug report or incident without pasting
+the whole record. It's the field that turns "we logged everything" into "we can actually
+locate the one thing that went wrong."
+
+(Strong runners-up: latency_ms for SLA/performance monitoring at scale, and a
+session_id/user_id to group questions by user — useful for spotting a single user
+repeatedly probing the refuse boundary, or finding that a misclassification cluster all
+came from one client.)
 ```
